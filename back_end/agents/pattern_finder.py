@@ -4,12 +4,22 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from collections import defaultdict
 import re
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 import pickle
 import os
 import asyncio
 
-#structure that we are going to use to comminicate between uAgents
+# Structure for communication between uAgents
+
+class PatternAnalysisForPlannerMessage(Model):
+    patterns: List[Dict[str, Any]]
+    user_id: str
+    total_patterns: int
+    high_confidence_patterns: int
+    focus_patterns: List[str] = []
+    trigger_reason: str = ""
+    is_baseline: bool = False
+    
 class ExtractedDataMessage(Model):
     keywords: List[Tuple[str, float]]
     emotions: List[Tuple[str, float]]
@@ -29,6 +39,17 @@ class PatternAnalysisMessage(Model):
     total_patterns: int
     high_confidence_patterns: int
     is_baseline: bool = False
+
+class ConfidenceUpdateMessage(Model):
+    pattern_id: str
+    confidence_adjustment: float
+    user_id: str
+    reason: str
+
+class PlannerTriggerMessage(Model):
+    user_id: str
+    reason: str
+    patterns_to_focus: List[str]
 
 # Initialize pattern finder agent
 pattern_finder_agent = Agent(
@@ -131,20 +152,20 @@ class SemanticPatternFinder:
         best_group = None
         best_similarity = 0
         
-        for group_id, group_data in self.activity_groups.items(): #find the group that best matches current item
+        for group_id, group_data in self.activity_groups.items():
             similarity = cosine_similarity([activity_embedding], [group_data['embedding']])[0][0]
             if similarity > best_similarity and similarity >= self.similarity_threshold:
                 best_similarity = similarity
                 best_group = group_id
         
-        if best_group is not None: #if we have something at our threshold
+        if best_group is not None:
             self.activity_groups[best_group]['activities'].add(activity)
             self.activity_groups[best_group]['activities'].add(canonical_activity)
             
             self.activity_to_group[activity] = best_group
             self.activity_to_group[canonical_activity] = best_group
             return best_group
-        else: #means we didnt find a group that matches us
+        else:
             group_id = self.next_group_id
             self.next_group_id += 1
             
@@ -189,7 +210,6 @@ class SemanticPatternFinder:
                 effect_data['observation_count'] = new_count
     
     def batch_add_observations(self, extracted_data_list):
-        #used for testing to give an example user with 30 days of logs
         for extracted_data in extracted_data_list:
             self.add_observation(
                 extracted_data.keywords,
@@ -225,7 +245,6 @@ class SemanticPatternFinder:
         return sorted(patterns, key=lambda x: x['confidence'], reverse=True)
     
     def save_state(self, filename):
-        #used to cahce
         state = {
             'activity_groups': self.activity_groups,
             'group_effects': self.group_effects,
@@ -236,7 +255,6 @@ class SemanticPatternFinder:
             pickle.dump(state, f)
     
     def load_state(self, filename):
-        #load out cahce
         try:
             with open(filename, 'rb') as f:
                 state = pickle.load(f)
@@ -251,7 +269,7 @@ class SemanticPatternFinder:
 @pattern_finder_agent.on_event("startup")
 async def initialize_pattern_finder(ctx: Context):
     global pattern_finder
-    ctx.logger.info("🔧 Initializing Pattern Finder...")
+    ctx.logger.info("Initializing Pattern Finder...")
     
     pattern_finder = SemanticPatternFinder(similarity_threshold=0.85)
     ctx.logger.info("Pattern Finder initialized, waiting for baseline data...")
@@ -274,12 +292,11 @@ async def handle_baseline_init(ctx: Context, sender: str, msg: BaselineInitMessa
         pattern_finder.save_state(PATTERN_CACHE_FILE)
         baseline_initialized = True
         
-        #find patterns in our exiting test user
         patterns = pattern_finder.get_patterns(min_confidence=0.1)
         
         ctx.logger.info(f"BASELINE COMPLETE! Generated {len(patterns)} patterns")
         
-        # Create baseline analysis message
+        # Create baseline analysis message FOR CURATOR (old format)
         analysis_msg = PatternAnalysisMessage(
             patterns=patterns,
             user_id=msg.user_id,
@@ -288,15 +305,15 @@ async def handle_baseline_init(ctx: Context, sender: str, msg: BaselineInitMessa
             is_baseline=True
         )
         
-        # Small delay then send to planner
+        # Send to curator (old format)
         await asyncio.sleep(1)
-        await ctx.send("agent1qwvypts2ft35u3w4uhg8da0cj5edkmp0k7slvjqtekas26t4evxj7xk7a4g", analysis_msg)
-        ctx.logger.info("SENT BASELINE ANALYSIS TO PLANNER")
+        await ctx.send("agent1qdr8zekrarc5hhyhxju7suyr8nfxe6j8q9kgxa9007v8wmdvraw9z0uw37v", analysis_msg)
+        ctx.logger.info("SENT BASELINE ANALYSIS TO CURATOR")
         
     except Exception as e:
         ctx.logger.error(f"Error processing baseline data: {str(e)}")
 
-@pattern_finder_agent.on_message(model=ExtractedDataMessage) #processing dynamic messages
+@pattern_finder_agent.on_message(model=ExtractedDataMessage)
 async def handle_extracted_data(ctx: Context, sender: str, msg: ExtractedDataMessage):
     ctx.logger.info(f"Processing NEW daily entry from {sender}")
     
@@ -331,12 +348,69 @@ async def handle_extracted_data(ctx: Context, sender: str, msg: ExtractedDataMes
             is_baseline=False
         )
         
-        # Send to planner agent
-        await ctx.send("agent1qwvypts2ft35u3w4uhg8da0cj5edkmp0k7slvjqtekas26t4evxj7xk7a4g", analysis_msg)
-        ctx.logger.info("Sent pattern analysis to planner")
+        # Send to curator agent
+        await ctx.send("agent1qdr8zekrarc5hhyhxju7suyr8nfxe6j8q9kgxa9007v8wmdvraw9z0uw37v", analysis_msg)
+        ctx.logger.info("Sent pattern analysis to curator")
         
     except Exception as e:
         ctx.logger.error(f"Error processing extracted data: {str(e)}")
+
+@pattern_finder_agent.on_message(model=ConfidenceUpdateMessage)
+async def handle_confidence_update(ctx: Context, sender: str, msg: ConfidenceUpdateMessage):
+    """Handle confidence adjustments from curator"""
+    ctx.logger.info(f"Adjusting confidence for '{msg.pattern_id}' by {msg.confidence_adjustment:+.2f}")
+    
+    if pattern_finder is None:
+        return
+    
+    try:
+        # Find and update the pattern confidence
+        for group_id, group_data in pattern_finder.activity_groups.items():
+            if group_data['label'] == msg.pattern_id:
+                effect_data = pattern_finder.group_effects[group_id]
+                old_confidence = effect_data['confidence']
+                new_confidence = max(0.0, min(1.0, old_confidence + msg.confidence_adjustment))
+                effect_data['confidence'] = new_confidence
+                
+                ctx.logger.info(f"Updated confidence: {old_confidence:.2f} -> {new_confidence:.2f}")
+                pattern_finder.save_state(PATTERN_CACHE_FILE)
+                break
+        else:
+            ctx.logger.warning(f"Pattern '{msg.pattern_id}' not found for confidence update")
+                
+    except Exception as e:
+        ctx.logger.error(f"Error updating confidence: {str(e)}")
+
+@pattern_finder_agent.on_message(model=PlannerTriggerMessage)
+async def handle_planner_trigger(ctx: Context, sender: str, msg: PlannerTriggerMessage):
+    """Curator tells us to send current patterns to planner"""
+    ctx.logger.info(f"Curator triggered planner update: {msg.reason}")
+    ctx.logger.info(f"Focus patterns: {msg.patterns_to_focus}")
+    
+    if pattern_finder is None:
+        return
+    
+    try:
+        # Get current patterns
+        patterns = pattern_finder.get_patterns(min_confidence=0.2)
+        
+        # Create the NEW analysis message with focus information
+        analysis_msg = PatternAnalysisForPlannerMessage(
+            patterns=patterns,
+            user_id=msg.user_id,
+            total_patterns=len(patterns),
+            high_confidence_patterns=len([p for p in patterns if p['confidence'] > 0.7]),
+            focus_patterns=msg.patterns_to_focus,  # Pass the focus patterns
+            trigger_reason=msg.reason,             # Pass the trigger reason
+            is_baseline=False
+        )
+        
+        # Send directly to planner
+        await ctx.send("agent1qwvypts2ft35u3w4uhg8da0cj5edkmp0k7slvjqtekas26t4evxj7xk7a4g", analysis_msg)
+        ctx.logger.info("Sent updated patterns to planner (triggered by curator)")
+        
+    except Exception as e:
+        ctx.logger.error(f"Error sending to planner: {str(e)}")
 
 if __name__ == "__main__":
     pattern_finder_agent.run()
