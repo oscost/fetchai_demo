@@ -54,13 +54,11 @@ Agents:
     
 
 Plan for what to do next:
-    Create a planner that is able to take in what our pattern finder gives us. then
-    it should be able to create example suggestions.
-
     Create the curator to guage what needs to be altered. Also allow for us to properly
     modify confidence levels in patterns with our curator.
 
-    Make the messenger and structure everything with fetch.ai to allow for a complete
-    architecure.
+    Have our front end trigger the uAgent pipeline.
+    (namely extractor. NOTE basically what our test script does)
 
-    Connect to our front_end.
+    Have our front end properly communicate with our pipeline. This way we are displaying
+    what is intended.
