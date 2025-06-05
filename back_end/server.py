@@ -219,7 +219,7 @@ class DynamicData:
         self.current_patterns = patterns
         self.last_pattern_update = datetime.now()
         self.system_status["last_analysis"] = datetime.now()
-        print(f"📊 UPDATED PATTERNS: {len(patterns)} patterns from AI agents")
+        print(f"UPDATED PATTERNS: {len(patterns)} patterns from AI agents")
         
     def update_recommendations(self, pattern_id, recommendation):
         self.current_recommendations[pattern_id] = recommendation
