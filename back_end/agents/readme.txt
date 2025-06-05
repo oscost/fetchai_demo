@@ -41,19 +41,11 @@ Agents:
         suggestions. We want our curated reccomendations to be reasonably stable
         so we will keep them locked unless we have big changes in our confidence level.
 
-    Messenger:
-        On a new daily log will start the process of extraction. This will eventually lead
-        to our pattern matcher. If we pick up a new trend this will triger our planner.
-
-        If we notice concerning behavior and if the user allows for contacts to be messaged
-        when concerning behavior is flagged it will notify contacts with a brief summary.
-
-        All our agents communicate through the messenger. This is to reduce abstract away
-        communication semantics in each specific agent and give each agent messages in an
-        expected format.
     
 
 Plan for what to do next:
+    Pattern_finder will pipe into our curator. ONLY if we deem it neccesary, we are to
+    tell Pattern_finder to send to Planner.
     Create the curator to guage what needs to be altered. Also allow for us to properly
     modify confidence levels in patterns with our curator.
 
