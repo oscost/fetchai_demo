@@ -1,8 +1,47 @@
+from uagents import Agent, Context, Model
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from collections import defaultdict
 import re
+from typing import List, Tuple, Dict, Any
+import pickle
+import os
+import asyncio
+
+#structure that we are going to use to comminicate between uAgents
+class ExtractedDataMessage(Model):
+    keywords: List[Tuple[str, float]]
+    emotions: List[Tuple[str, float]]
+    mood_rating: int
+    energy_rating: int
+    user_id: str
+    entry_text: str
+
+class BaselineInitMessage(Model):
+    baseline_data: List[ExtractedDataMessage]
+    total_entries: int
+    user_id: str
+
+class PatternAnalysisMessage(Model):
+    patterns: List[Dict[str, Any]]
+    user_id: str
+    total_patterns: int
+    high_confidence_patterns: int
+    is_baseline: bool = False
+
+# Initialize pattern finder agent
+pattern_finder_agent = Agent(
+    name="pattern_finder_agent",
+    seed="pattern_finder_seed",
+    port=8002,
+    endpoint=["http://127.0.0.1:8002/submit"]
+)
+
+# Global pattern finder instance
+pattern_finder = None
+PATTERN_CACHE_FILE = "pattern_finder_cache.pkl"
+baseline_initialized = False
 
 class SemanticPatternFinder:
     def __init__(self, similarity_threshold=0.85):
@@ -13,7 +52,7 @@ class SemanticPatternFinder:
         self.similarity_threshold = similarity_threshold
         self.next_group_id = 0
         
-        #note these kept appearing even though not very relevant so I am filtering the,
+        # Time patterns to filter out
         self.time_patterns = [
             r'\d+(?:am|pm|AM|PM)',  
             r'\d+:\d+',             
@@ -30,7 +69,7 @@ class SemanticPatternFinder:
             'social': ['friends', 'family', 'party', 'dinner', 'brunch', 'hanging', 'video', 'call', 'chat', 'meeting', 'conversation', 'gatherings', 'socializing'],
             'sleep': ['sleep', 'sleeping', 'bed', 'bedtime', 'nap', 'rest', 'tired', 'exhausted', 'late']
         }
-        
+    
     def _calculate_overall_averages(self):
         all_moods = []
         all_energies = []
@@ -48,7 +87,7 @@ class SemanticPatternFinder:
     def _is_valid_activity(self, activity):
         activity_lower = activity.lower().strip()
         
-        #FILTER unneeded stuff
+        # Filter unneeded stuff
         for pattern in self.time_patterns:
             if re.search(pattern, activity_lower):
                 return False
@@ -65,9 +104,8 @@ class SemanticPatternFinder:
             return False
             
         return True
-        
+    
     def _get_canonical_activity(self, activity):
-        """Map activity to canonical form using synonyms"""
         activity_lower = activity.lower().strip()
         
         for canonical, synonyms in self.activity_synonyms.items():
@@ -75,7 +113,7 @@ class SemanticPatternFinder:
                 return canonical
                 
         return activity_lower
-        
+    
     def _find_or_create_group(self, activity):
         if not self._is_valid_activity(activity):
             return None
@@ -93,20 +131,20 @@ class SemanticPatternFinder:
         best_group = None
         best_similarity = 0
         
-        for group_id, group_data in self.activity_groups.items():
+        for group_id, group_data in self.activity_groups.items(): #find the group that best matches current item
             similarity = cosine_similarity([activity_embedding], [group_data['embedding']])[0][0]
             if similarity > best_similarity and similarity >= self.similarity_threshold:
                 best_similarity = similarity
                 best_group = group_id
         
-        if best_group is not None:
+        if best_group is not None: #if we have something at our threshold
             self.activity_groups[best_group]['activities'].add(activity)
             self.activity_groups[best_group]['activities'].add(canonical_activity)
             
             self.activity_to_group[activity] = best_group
             self.activity_to_group[canonical_activity] = best_group
             return best_group
-        else:
+        else: #means we didnt find a group that matches us
             group_id = self.next_group_id
             self.next_group_id += 1
             
@@ -150,6 +188,16 @@ class SemanticPatternFinder:
                 effect_data['confidence'] = min(1.0, new_count / 5.0)  
                 effect_data['observation_count'] = new_count
     
+    def batch_add_observations(self, extracted_data_list):
+        #used for testing to give an example user with 30 days of logs
+        for extracted_data in extracted_data_list:
+            self.add_observation(
+                extracted_data.keywords,
+                extracted_data.emotions,
+                extracted_data.mood_rating,
+                extracted_data.energy_rating
+            )
+    
     def get_patterns(self, min_confidence=0.2):
         patterns = []
         overall_avg_mood, overall_avg_energy = self._calculate_overall_averages()
@@ -176,38 +224,119 @@ class SemanticPatternFinder:
         
         return sorted(patterns, key=lambda x: x['confidence'], reverse=True)
     
-    def map_new_activity(self, activity):
-        if not self._is_valid_activity(activity):
-            return None
-            
-        canonical_activity = self._get_canonical_activity(activity)
+    def save_state(self, filename):
+        #used to cahce
+        state = {
+            'activity_groups': self.activity_groups,
+            'group_effects': self.group_effects,
+            'activity_to_group': self.activity_to_group,
+            'next_group_id': self.next_group_id
+        }
+        with open(filename, 'wb') as f:
+            pickle.dump(state, f)
+    
+    def load_state(self, filename):
+        #load out cahce
+        try:
+            with open(filename, 'rb') as f:
+                state = pickle.load(f)
+            self.activity_groups = state['activity_groups']
+            self.group_effects = state['group_effects']
+            self.activity_to_group = state['activity_to_group']
+            self.next_group_id = state['next_group_id']
+            return True
+        except FileNotFoundError:
+            return False
+
+@pattern_finder_agent.on_event("startup")
+async def initialize_pattern_finder(ctx: Context):
+    global pattern_finder
+    ctx.logger.info("🔧 Initializing Pattern Finder...")
+    
+    pattern_finder = SemanticPatternFinder(similarity_threshold=0.85)
+    ctx.logger.info("Pattern Finder initialized, waiting for baseline data...")
+
+@pattern_finder_agent.on_message(model=BaselineInitMessage)
+async def handle_baseline_init(ctx: Context, sender: str, msg: BaselineInitMessage):
+    global baseline_initialized
+    ctx.logger.info(f"RECEIVED BASELINE: {msg.total_entries} entries from {sender}")
+    
+    if pattern_finder is None:
+        ctx.logger.error("Pattern finder not initialized yet!")
+        return
+    
+    try:
+        ctx.logger.info(f"Processing {len(msg.baseline_data)} baseline entries in batch...")
         
-        if canonical_activity in self.activity_to_group:
-            group_id = self.activity_to_group[canonical_activity]
-            return {
-                'group_label': self.activity_groups[group_id]['label'],
-                'confidence': self.group_effects[group_id]['confidence'],
-                'predicted_mood_effect': self.group_effects[group_id]['mood_outcomes'],
-                'predicted_energy_effect': self.group_effects[group_id]['energy_outcomes']
-            }
-        else:
-            activity_embedding = self.model.encode([canonical_activity])[0]
-            best_match = None
-            best_similarity = 0
-            
-            for group_id, group_data in self.activity_groups.items():
-                similarity = cosine_similarity([activity_embedding], [group_data['embedding']])[0][0]
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_match = group_id
-            
-            if best_match and best_similarity > 0.3:
-                return {
-                    'group_label': self.activity_groups[best_match]['label'],
-                    'confidence': self.group_effects[best_match]['confidence'] * best_similarity,
-                    'predicted_mood_effect': self.group_effects[best_match]['mood_outcomes'],
-                    'predicted_energy_effect': self.group_effects[best_match]['energy_outcomes'],
-                    'similarity': best_similarity
-                }
-            
-            return None
+        pattern_finder.batch_add_observations(msg.baseline_data)
+        ctx.logger.info(f"Completed batch processing of {len(msg.baseline_data)} baseline entries")
+        
+        pattern_finder.save_state(PATTERN_CACHE_FILE)
+        baseline_initialized = True
+        
+        #find patterns in our exiting test user
+        patterns = pattern_finder.get_patterns(min_confidence=0.1)
+        
+        ctx.logger.info(f"BASELINE COMPLETE! Generated {len(patterns)} patterns")
+        
+        # Create baseline analysis message
+        analysis_msg = PatternAnalysisMessage(
+            patterns=patterns,
+            user_id=msg.user_id,
+            total_patterns=len(patterns),
+            high_confidence_patterns=len([p for p in patterns if p['confidence'] > 0.7]),
+            is_baseline=True
+        )
+        
+        # Small delay then send to planner
+        await asyncio.sleep(1)
+        await ctx.send("agent1qwvypts2ft35u3w4uhg8da0cj5edkmp0k7slvjqtekas26t4evxj7xk7a4g", analysis_msg)
+        ctx.logger.info("SENT BASELINE ANALYSIS TO PLANNER")
+        
+    except Exception as e:
+        ctx.logger.error(f"Error processing baseline data: {str(e)}")
+
+@pattern_finder_agent.on_message(model=ExtractedDataMessage) #processing dynamic messages
+async def handle_extracted_data(ctx: Context, sender: str, msg: ExtractedDataMessage):
+    ctx.logger.info(f"Processing NEW daily entry from {sender}")
+    
+    if pattern_finder is None:
+        ctx.logger.error("Pattern finder not initialized yet!")
+        return
+        
+    if not baseline_initialized:
+        ctx.logger.warning("Baseline not initialized yet, processing new entry anyway...")
+    
+    try:
+        # Add single observation to pattern finder
+        pattern_finder.add_observation(
+            msg.keywords,
+            msg.emotions,
+            msg.mood_rating,
+            msg.energy_rating
+        )
+        
+        pattern_finder.save_state(PATTERN_CACHE_FILE)
+        
+        # Get current patterns
+        patterns = pattern_finder.get_patterns(min_confidence=0.2)
+        ctx.logger.info(f"Found {len(patterns)} patterns with confidence >= 0.2")
+        
+        # Create response message
+        analysis_msg = PatternAnalysisMessage(
+            patterns=patterns,
+            user_id=msg.user_id,
+            total_patterns=len(patterns),
+            high_confidence_patterns=len([p for p in patterns if p['confidence'] > 0.7]),
+            is_baseline=False
+        )
+        
+        # Send to planner agent
+        await ctx.send("agent1qwvypts2ft35u3w4uhg8da0cj5edkmp0k7slvjqtekas26t4evxj7xk7a4g", analysis_msg)
+        ctx.logger.info("Sent pattern analysis to planner")
+        
+    except Exception as e:
+        ctx.logger.error(f"Error processing extracted data: {str(e)}")
+
+if __name__ == "__main__":
+    pattern_finder_agent.run()

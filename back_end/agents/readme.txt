@@ -21,9 +21,9 @@ Agents:
         to account for curation more easily.
     
     Planner:
-        Will query ASI1 or another LLM in order to find answers to whatever patterns we have
+        Will query ASI1 in order to find answers to whatever patterns we have
         identified. Additionally will give explinations on why such changes will alter the
-        effect half of the discovered pattern. It can also give notes on things you are
+        effect of the discovered pattern. It can also give notes on things you are
         doing well already.
     
     Curator:
