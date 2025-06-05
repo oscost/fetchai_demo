@@ -1,18 +1,66 @@
 'use client';
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function DailyEntry() {
+  const router = useRouter();
   const [formData, setFormData] = useState({
-    energy: 5,
-    mood: 5,
-    journalEntry: '',
-    emotionalState: ''
+    energy_rating: 5,
+    mood_rating: 5,
+    entry_text: ''
   });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('Submitting:', formData);
+    setSubmitting(true);
+
+    try {
+      const response = await fetch('http://localhost:5000/api/daily_entry', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        setSubmitted(true);
+        setTimeout(() => {
+          router.push('/');
+        }, 2000);
+      } else {
+        alert('Error submitting entry: ' + result.error);
+      }
+    } catch (error) {
+      console.error('Error submitting entry:', error);
+      alert('Error submitting entry. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  if (submitted) {
+    return (
+      <div className="page-container">
+        <div className="content-wrapper-narrow text-center">
+          <div className="card">
+            <div className="text-6xl mb-4">✅</div>
+            <h2 className="text-2xl font-bold text-primary mb-2">Entry Submitted!</h2>
+            <p className="text-secondary mb-4">Your AI agents are now processing your daily data...</p>
+            <div className="flex justify-center space-x-2">
+              <span className="agent-status analyzing">Extractor Agent</span>
+              <span className="agent-status learning">Pattern Finder</span>
+              <span className="agent-status active">Curator</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-container">
@@ -25,14 +73,14 @@ export default function DailyEntry() {
         <form onSubmit={handleSubmit} className="card space-y-8">
           <div className="form-group">
             <label className="form-label">
-              Energy Level: {formData.energy}/10
+              Energy Level: {formData.energy_rating}/10
             </label>
             <input
               type="range"
               min="1"
               max="10"
-              value={formData.energy}
-              onChange={(e) => setFormData({...formData, energy: e.target.value})}
+              value={formData.energy_rating}
+              onChange={(e) => setFormData({...formData, energy_rating: parseInt(e.target.value)})}
               className="slider"
             />
             <div className="flex justify-between text-sm text-muted mt-2">
@@ -43,14 +91,14 @@ export default function DailyEntry() {
 
           <div className="form-group">
             <label className="form-label">
-              Overall Mood: {formData.mood}/10
+              Overall Mood: {formData.mood_rating}/10
             </label>
             <input
               type="range"
               min="1"
               max="10"
-              value={formData.mood}
-              onChange={(e) => setFormData({...formData, mood: e.target.value})}
+              value={formData.mood_rating}
+              onChange={(e) => setFormData({...formData, mood_rating: parseInt(e.target.value)})}
               className="slider"
             />
             <div className="flex justify-between text-sm text-muted mt-2">
@@ -60,38 +108,37 @@ export default function DailyEntry() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Daily Summary</label>
+            <label className="form-label">What happened today?</label>
             <textarea
-              value={formData.journalEntry}
-              onChange={(e) => setFormData({...formData, journalEntry: e.target.value})}
-              placeholder="What happened today? Any highlights, challenges, or thoughts you'd like to share..."
+              value={formData.entry_text}
+              onChange={(e) => setFormData({...formData, entry_text: e.target.value})}
+              placeholder="Describe your day... What activities did you do? How did you feel? Any highlights or challenges?"
               className="form-textarea"
-              rows="4"
+              rows="6"
+              required
             />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Emotional State Summary</label>
-            <textarea
-              value={formData.emotionalState}
-              onChange={(e) => setFormData({...formData, emotionalState: e.target.value})}
-              placeholder="How are you feeling emotionally? Any stress, excitement, anxiety, or contentment you want to note..."
-              className="form-textarea"
-              rows="3"
-            />
+            <p className="text-sm text-muted mt-2">
+              Be specific about activities, meals, exercise, social interactions, work, etc. 
+              This helps your AI agents find meaningful patterns.
+            </p>
           </div>
 
           <div className="card" style={{background: '#EBF8FF', padding: '1rem'}}>
-            <h3 className="text-primary font-medium mb-2">Agents that will process this entry:</h3>
+            <h3 className="text-primary font-medium mb-2">Agents processing this entry:</h3>
             <div className="flex flex-wrap gap-2">
-              <span className="agent-status analyzing">Pattern Agent</span>
-              <span className="agent-status active">Insight Agent</span>
-              <span className="agent-status learning">Personalization Agent</span>
+              <span className="agent-status analyzing">Extractor Agent</span>
+              <span className="agent-status learning">Pattern Finder</span>
+              <span className="agent-status active">Curator Agent</span>
+              <span className="agent-status specialized">Planner Agent</span>
             </div>
           </div>
 
-          <button type="submit" className="btn btn-primary w-full">
-            Submit Daily Entry
+          <button 
+            type="submit" 
+            className="btn btn-primary w-full"
+            disabled={submitting || !formData.entry_text.trim()}
+          >
+            {submitting ? 'Submitting...' : 'Submit Daily Entry'}
           </button>
         </form>
       </div>

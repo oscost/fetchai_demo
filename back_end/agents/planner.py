@@ -1,10 +1,11 @@
-#REMBER TO SET ENVIROMENT VARIABLE FOR API KEY BEFORE RUNNING!!!!
+#REMEMBER TO SET ENVIRONMENT VARIABLE FOR API KEY BEFORE RUNNING!!!!
 from uagents import Agent, Context, Model
 import requests
 import json
 from typing import List, Dict, Any
 import os
 import numpy as np
+import threading
 
 class PatternAnalysisMessage(Model):
     patterns: List[Dict[str, Any]]
@@ -42,6 +43,32 @@ planner_agent = Agent(
     port=8003,
     endpoint=["http://127.0.0.1:8003/submit"]
 )
+
+def send_to_flask_server(endpoint, data):
+    """Send updates back to Flask server"""
+    try:
+        # Use 127.0.0.1 instead of localhost to match Flask's binding
+        flask_endpoint = endpoint
+        url = f"http://127.0.0.1:5000{flask_endpoint}"  # Changed from localhost
+        
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(url, json=data, headers=headers, timeout=10)  # Increased timeout
+        
+        print(f"Sent to Flask {flask_endpoint}: {response.status_code}")
+        
+        if response.status_code == 200:
+            print("Flask update successful!")
+            return response.json()
+        else:
+            print(f"Flask error {response.status_code}: {response.text}")
+            return None
+            
+    except requests.exceptions.ConnectionError:
+        print("Could not connect to Flask server - is it running on 127.0.0.1:5000?")
+        return None
+    except Exception as e:
+        print(f"Error sending to Flask: {e}")
+        return None
 
 class WellnessPlanner:
     def __init__(self, asi_api_key: str):
@@ -99,7 +126,7 @@ class WellnessPlanner:
         
         self.baseline_patterns = patterns
         
-        # sort into catagories of levels
+        # sort into categories of levels
         highly_positive = [p for p in patterns if p['mood_change_from_avg'] > 2.0]
         moderately_positive = [p for p in patterns if 1.0 < p['mood_change_from_avg'] <= 2.0]
         neutral = [p for p in patterns if -1.0 <= p['mood_change_from_avg'] <= 1.0]
@@ -185,8 +212,8 @@ class WellnessPlanner:
         **PATTERN STATUS ANALYSIS:**
         For EACH pattern above, provide analysis in this format:
         - [Pattern Name]: [Confidence score] confidence, [mood impact] mood effect, [energy impact] energy effect
-          → Status: [Is this pattern helping, hurting, or neutral? Based on the actual numbers]
-          → Reliability: [What does the confidence score tell us about this pattern's consistency?]
+          Status: [Is this pattern helping, hurting, or neutral? Based on the actual numbers]
+          Reliability: [What does the confidence score tell us about this pattern's consistency?]
 
         **PATTERN OPTIMIZATION INSIGHTS:**
         - Strongest reliable positive patterns: [List patterns with confidence >0.7 AND positive mood impact]
@@ -331,6 +358,21 @@ async def handle_focused_pattern_analysis(ctx: Context, sender: str, msg: Patter
         if msg.focus_patterns:
             ctx.logger.info(f"Filtered to {len(patterns_to_analyze)} focused patterns from {len(msg.patterns)} total")
         
+        # Send patterns to Flask server
+        def send_patterns_to_flask():
+            try:
+                send_to_flask_server("/api/agent_update/patterns", {
+                    "patterns": msg.patterns,
+                    "focus_patterns": msg.focus_patterns,
+                    "trigger_reason": msg.trigger_reason,
+                    "is_baseline": msg.is_baseline
+                })
+            except Exception as e:
+                ctx.logger.error(f"Error sending patterns to Flask: {e}")
+        
+        # Send in background thread
+        threading.Thread(target=send_patterns_to_flask).start()
+        
         # Create focus context for AI
         focus_context = ""
         if msg.focus_patterns:
@@ -377,6 +419,49 @@ async def handle_focused_pattern_analysis(ctx: Context, sender: str, msg: Patter
             ctx.logger.info("Processing PATTERN ANALYSIS update...")
             analysis = wellness_planner.analyze_patterns(patterns_to_analyze, focus_context)
             optimizations = wellness_planner.generate_pattern_optimizations(patterns_to_analyze, focus_context)
+            
+            # Send recommendations to Flask for each pattern
+            def send_recommendations_to_flask():
+                try:
+                    for pattern in patterns_to_analyze:
+                        pattern_id = pattern.get('group_label', 'unknown')
+                        
+                        # Parse the optimization strategies into a list
+                        strategies_list = []
+                        if optimizations:
+                            # Split by sections and extract bullet points
+                            lines = optimizations.split('\n')
+                            current_strategies = []
+                            for line in lines:
+                                line = line.strip()
+                                if line.startswith('-') or line.startswith('•'):
+                                    current_strategies.append(line[1:].strip())
+                                elif line and not line.startswith('**') and current_strategies:
+                                    strategies_list.extend(current_strategies)
+                                    current_strategies = []
+                            if current_strategies:
+                                strategies_list.extend(current_strategies)
+                        
+                        # If no strategies parsed, use the full text
+                        if not strategies_list:
+                            strategies_list = [optimizations] if optimizations else ["Generating strategies..."]
+                        
+                        recommendation_data = {
+                            "pattern_id": pattern_id,
+                            "recommendation": {
+                                "title": f"AI Insights for {pattern_id.title()}",
+                                "analysis": analysis.get('insights', 'Analysis in progress...'),
+                                "strategies": strategies_list[:7],  # Limit to 7 strategies
+                                "last_update": "now",
+                                "source": "ai_agents"
+                            }
+                        }
+                        send_to_flask_server("/api/agent_update/recommendations", recommendation_data)
+                except Exception as e:
+                    ctx.logger.error(f"Error sending recommendations to Flask: {e}")
+            
+            # Send recommendations in background
+            threading.Thread(target=send_recommendations_to_flask).start()
             
             # Create habit change plans for concerning patterns (from focused set)
             habit_plans = []
@@ -435,6 +520,20 @@ async def handle_immediate_update(ctx: Context, sender: str, msg: ImmediatePlann
         # Filter to only the focus patterns
         patterns_to_analyze = wellness_planner.filter_patterns_by_focus(msg.updated_patterns, msg.patterns_to_focus)
         
+        # Send updated patterns to Flask
+        def send_immediate_patterns_to_flask():
+            try:
+                send_to_flask_server("/api/agent_update/patterns", {
+                    "patterns": msg.updated_patterns,
+                    "focus_patterns": msg.patterns_to_focus,
+                    "trigger_reason": msg.reason,
+                    "is_baseline": False
+                })
+            except Exception as e:
+                ctx.logger.error(f"Error sending immediate patterns to Flask: {e}")
+        
+        threading.Thread(target=send_immediate_patterns_to_flask).start()
+        
         ctx.logger.info("=" * 60)
         ctx.logger.info("IMMEDIATE PATTERN ANALYSIS UPDATE")
         ctx.logger.info("=" * 60)
@@ -446,6 +545,40 @@ async def handle_immediate_update(ctx: Context, sender: str, msg: ImmediatePlann
         
         analysis = wellness_planner.analyze_patterns(patterns_to_analyze, focus_context)
         optimizations = wellness_planner.generate_pattern_optimizations(patterns_to_analyze, focus_context)
+        
+        # Send immediate recommendations update
+        def send_immediate_recommendations_to_flask():
+            try:
+                for pattern in patterns_to_analyze:
+                    pattern_id = pattern.get('group_label', 'unknown')
+                    
+                    # Parse strategies
+                    strategies_list = []
+                    if optimizations:
+                        lines = optimizations.split('\n')
+                        for line in lines:
+                            line = line.strip()
+                            if line.startswith('-') or line.startswith('•'):
+                                strategies_list.append(line[1:].strip())
+                    
+                    if not strategies_list:
+                        strategies_list = [optimizations] if optimizations else ["Updated strategies based on your feedback..."]
+                    
+                    recommendation_data = {
+                        "pattern_id": pattern_id,
+                        "recommendation": {
+                            "title": f"Updated AI Insights for {pattern_id.title()}",
+                            "analysis": f"UPDATED BASED ON YOUR FEEDBACK: {analysis.get('insights', 'Analysis updated...')}",
+                            "strategies": strategies_list[:7],
+                            "last_update": "just now",
+                            "source": "ai_agents_feedback"
+                        }
+                    }
+                    send_to_flask_server("/api/agent_update/recommendations", recommendation_data)
+            except Exception as e:
+                ctx.logger.error(f"Error sending immediate recommendations to Flask: {e}")
+        
+        threading.Thread(target=send_immediate_recommendations_to_flask).start()
         
         ctx.logger.info("UPDATED PATTERN ANALYSIS:")
         ctx.logger.info(analysis['insights'])

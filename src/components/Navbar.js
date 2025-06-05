@@ -6,24 +6,23 @@ export default function Navbar() {
   const pathname = usePathname();
 
   const navItems = [
-    { href: '/', label: 'Dashboard', icon: '' },
-    { href: '/agents', label: 'Agents', icon: '' },
-    { href: '/daily_entry', label: 'Daily Entry', icon: '' },
-    { href: '/history', label: 'History', icon: '' },
+    { href: '/', label: 'Dashboard', icon: '📊' },
+    { href: '/daily_entry', label: 'Daily Entry', icon: '✏️' },
+    { href: '/patterns', label: 'Patterns', icon: '🔍' },
+    { href: '/recommendations', label: 'Recommendations', icon: '💡' },
+    { href: '/history', label: 'History', icon: '📚' },
   ];
 
   return (
     <nav className="navbar">
       <div className="navbar-container">
-        {/* Logo/Brand */}
         <div className="navbar-brand">
           <Link href="/" className="brand-link">
             <span className="brand-icon">🧠</span>
-            <span className="brand-text">Mood Mentor</span>
+            <span className="brand-text">WellnessAI</span>
           </Link>
         </div>
 
-        {/* Navigation Links */}
         <div className="navbar-nav">
           {navItems.map((item) => (
             <Link
@@ -35,6 +34,12 @@ export default function Navbar() {
               <span className="nav-text">{item.label}</span>
             </Link>
           ))}
+        </div>
+
+        <div className="navbar-utils">
+          <div className="user-menu">
+            <div className="user-avatar">U</div>
+          </div>
         </div>
       </div>
     </nav>

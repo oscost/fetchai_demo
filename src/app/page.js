@@ -1,6 +1,37 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 
 export default function Dashboard() {
+  const [dashboardData, setDashboardData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/dashboard');
+      const data = await response.json();
+      setDashboardData(data);
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="page-container">
+        <div className="content-wrapper text-center">
+          <div className="text-2xl">Loading your wellness insights...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page-container">
       <div className="content-wrapper">
@@ -12,19 +43,19 @@ export default function Dashboard() {
         <div className="stats-grid">
           <div className="stat-card">
             <div className="stat-label">Energy Trend</div>
-            <div className="stat-value positive">↗ +15%</div>
+            <div className="stat-value positive">{dashboardData?.energy_trend || '↗ +15%'}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Active Agents</div>
-            <div className="stat-value primary">3</div>
+            <div className="stat-value primary">{dashboardData?.active_agents || 4}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Patterns Found</div>
-            <div className="stat-value accent">7</div>
+            <div className="stat-value accent">{dashboardData?.patterns_found || 5}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Streak</div>
-            <div className="stat-value warning">12 days</div>
+            <div className="stat-label">Daily Entries</div>
+            <div className="stat-value warning">{dashboardData?.streak_days || 30}</div>
           </div>
         </div>
 
@@ -32,41 +63,36 @@ export default function Dashboard() {
           <div className="card">
             <h2 className="card-header flex items-center">
               <span className="w-3 h-3 bg-blue-500 rounded-full mr-3"></span>
-              Recent Insights
+              Recent AI Insights
             </h2>
             <div className="space-y-4">
-              <div className="insight-card pattern">
-                <p className="text-muted text-sm">Pattern Agent</p>
-                <p className="text-primary font-medium">Your energy peaks on days when you exercise before 10 AM</p>
-              </div>
-              <div className="insight-card insight">
-                <p className="text-muted text-sm">Insight Agent</p>
-                <p className="text-primary font-medium">Consider scheduling important tasks between 9-11 AM</p>
-              </div>
-              <div className="insight-card spawned">
-                <p className="text-muted text-sm">Weekend Energy Agent</p>
-                <p className="text-primary font-medium">New specialized agent created to optimize your weekends!</p>
-              </div>
+              {dashboardData?.recent_insights?.map((insight, index) => (
+                <div key={index} className={`insight-card ${insight.type}`}>
+                  <p className="text-muted text-sm">{insight.agent}</p>
+                  <p className="text-primary font-medium">{insight.text}</p>
+                  {insight.confidence && (
+                    <p className="text-xs text-secondary">Confidence: {(insight.confidence * 100).toFixed(0)}%</p>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
           <div className="card">
             <h2 className="card-header">Today's Recommendations</h2>
             <div className="space-y-3">
-              <div className="flex items-start space-x-3">
-                <div className="w-2 h-2 bg-green-500 rounded-full mt-2"></div>
-                <div>
-                  <p className="text-primary font-medium">Try a morning walk</p>
-                  <p className="text-secondary text-sm">Based on your energy patterns</p>
+              {dashboardData?.todays_recommendations?.map((rec, index) => (
+                <div key={index} className="flex items-start space-x-3">
+                  <div className={`w-2 h-2 rounded-full mt-2 ${
+                    rec.priority === 'high' ? 'bg-green-500' : 
+                    rec.priority === 'medium' ? 'bg-blue-500' : 'bg-gray-400'
+                  }`}></div>
+                  <div>
+                    <p className="text-primary font-medium">{rec.text}</p>
+                    <p className="text-secondary text-sm">{rec.reason}</p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-start space-x-3">
-                <div className="w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
-                <div>
-                  <p className="text-primary font-medium">Schedule creative work for 2 PM</p>
-                  <p className="text-secondary text-sm">Your peak creative hours</p>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
