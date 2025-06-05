@@ -52,3 +52,15 @@ Agents:
         communication semantics in each specific agent and give each agent messages in an
         expected format.
     
+
+Plan for what to do next:
+    Create a planner that is able to take in what our pattern finder gives us. then
+    it should be able to create example suggestions.
+
+    Create the curator to guage what needs to be altered. Also allow for us to properly
+    modify confidence levels in patterns with our curator.
+
+    Make the messenger and structure everything with fetch.ai to allow for a complete
+    architecure.
+
+    Connect to our front_end.
