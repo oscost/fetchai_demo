@@ -44,11 +44,6 @@ Agents:
     
 
 Plan for what to do next:
-    Pattern_finder will pipe into our curator. ONLY if we deem it neccesary, we are to
-    tell Pattern_finder to send to Planner.
-    Create the curator to guage what needs to be altered. Also allow for us to properly
-    modify confidence levels in patterns with our curator.
-
     Have our front end trigger the uAgent pipeline.
     (namely extractor. NOTE basically what our test script does)
 
